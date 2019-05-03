@@ -78,6 +78,8 @@ parser.add_argument('--eps', type=float, default=0.2,
 parser.add_argument('--loss_type', type=str,
                     choices=['mse', 'bce'], default='mse',
                     help='Choice for type of belleman loss.')
+parser.add_argument('--save_memory', action='store_true',
+                    help='If true, save memory while need more computation time by for-sentence.')
 args = parser.parse_args()
 
 if not os.path.exists(args.log):
@@ -104,26 +106,27 @@ env = GymEnv(args.env_name, log_dir=os.path.join(
     args.log, 'movie'), record_video=args.record)
 env.env.seed(args.seed)
 
-ob_space = env.observation_space
-ac_space = env.action_space
+observation_space = env.observation_space
+action_space = env.action_space
 
-qf_net = QNet(ob_space, ac_space, args.h1, args.h2)
-lagged_qf_net = QNet(ob_space, ac_space, args.h1, args.h2)
+qf_net = QNet(observation_space, action_space, args.h1, args.h2)
+lagged_qf_net = QNet(observation_space, action_space, args.h1, args.h2)
 lagged_qf_net.load_state_dict(qf_net.state_dict())
-targ_qf1_net = QNet(ob_space, ac_space, args.h1, args.h2)
+targ_qf1_net = QNet(observation_space, action_space, args.h1, args.h2)
 targ_qf1_net.load_state_dict(qf_net.state_dict())
-targ_qf2_net = QNet(ob_space, ac_space, args.h1, args.h2)
+targ_qf2_net = QNet(observation_space, action_space, args.h1, args.h2)
 targ_qf2_net.load_state_dict(lagged_qf_net.state_dict())
-qf = DeterministicSAVfunc(ob_space, ac_space, qf_net,
+qf = DeterministicSAVfunc(observation_space, action_space, qf_net,
                           data_parallel=args.data_parallel)
 lagged_qf = DeterministicSAVfunc(
-    ob_space, ac_space, lagged_qf_net, data_parallel=args.data_parallel)
-targ_qf1 = CEMDeterministicSAVfunc(ob_space, ac_space, targ_qf1_net, num_sampling=args.num_sampling,
-                                   num_best_sampling=args.num_best_sampling, num_iter=args.num_iter, multivari=args.multivari, data_parallel=args.data_parallel)
+    observation_space, action_space, lagged_qf_net, data_parallel=args.data_parallel)
+targ_qf1 = CEMDeterministicSAVfunc(observation_space, action_space, targ_qf1_net, num_sampling=args.num_sampling,
+                                   num_best_sampling=args.num_best_sampling, num_iter=args.num_iter,
+                                   multivari=args.multivari, data_parallel=args.data_parallel, save_memory=args.save_memory)
 targ_qf2 = DeterministicSAVfunc(
-    ob_space, ac_space, targ_qf2_net, data_parallel=args.data_parallel)
+    observation_space, action_space, targ_qf2_net, data_parallel=args.data_parallel)
 
-pol = ArgmaxQfPol(ob_space, ac_space, targ_qf1, eps=args.eps)
+pol = ArgmaxQfPol(observation_space, action_space, targ_qf1, eps=args.eps)
 
 sampler = EpiSampler(env, pol, num_parallel=args.num_parallel, seed=args.seed)
 
@@ -152,6 +155,7 @@ while args.max_epis > total_epi:
         total_epi += on_traj.num_epi
         step = on_traj.num_step
         total_step += step
+        epoch = step
 
         if args.data_parallel:
             qf.dp_run = True
@@ -161,7 +165,7 @@ while args.max_epis > total_epi:
 
         result_dict = qtopt.train(
             off_traj, qf, lagged_qf, targ_qf1, targ_qf2,
-            optim_qf, step, args.batch_size,
+            optim_qf, epoch, args.batch_size,
             args.tau, args.gamma, loss_type=args.loss_type
         )
 
@@ -171,7 +175,7 @@ while args.max_epis > total_epi:
             targ_qf1.dp_run = False
             targ_qf2.dp_run = False
 
-    total_grad_step += result_dict['grad_step']
+    total_grad_step += epoch
     if total_grad_step >= args.lag * num_update_lagged:
         logger.log('Updated lagged qf!!')
         lagged_qf_net.load_state_dict(qf_net.state_dict())

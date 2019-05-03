@@ -14,6 +14,8 @@ install_requires = [
     'cached_property',
     'torch>=1.0.1',
     'joblib>=0.11',
+    'cloudpickle',
+    'redis',
     'gym==0.10.5',
     'numpy>=1.13.3',
     'terminaltables',
@@ -22,7 +24,7 @@ install_requires = [
 
 setup(
     name='machina-rl',
-    version='0.2.0',
+    version='0.2.1',
     description='machina is a library for a deep reinforcement learning.',
     long_description=readme,
     author='Reiji Hatsugai',

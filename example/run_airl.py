@@ -72,8 +72,6 @@ parser.add_argument('--lam', type=float, default=0.97,
                     help='Tradeoff value of bias variance.')
 parser.add_argument('--pol_ent_beta', type=float, default=0,
                     help='Entropy coefficient for policy.')
-parser.add_argument('--discrim_ent_beta', type=float, default=0,
-                    help='Entropy coefficient for discriminator.')
 
 parser.add_argument('--max_grad_norm', type=float, default=10,
                     help='Value of maximum gradient norm.')
@@ -137,42 +135,43 @@ env.env.seed(args.seed)
 if args.c2d:
     env = C2DEnv(env)
 
-ob_space = env.observation_space
-ac_space = env.action_space
+observation_space = env.observation_space
+action_space = env.action_space
 
 
-pol_net = PolNet(ob_space, ac_space)
-if isinstance(ac_space, gym.spaces.Box):
-    pol = GaussianPol(ob_space, ac_space, pol_net,
+pol_net = PolNet(observation_space, action_space)
+if isinstance(action_space, gym.spaces.Box):
+    pol = GaussianPol(observation_space, action_space, pol_net,
                       data_parallel=args.data_parallel)
-elif isinstance(ac_space, gym.spaces.Discrete):
-    pol = CategoricalPol(ob_space, ac_space, pol_net,
+elif isinstance(action_space, gym.spaces.Discrete):
+    pol = CategoricalPol(observation_space, action_space, pol_net,
                          data_parallel=args.data_parallel)
-elif isinstance(ac_space, gym.spaces.MultiDiscrete):
+elif isinstance(action_space, gym.spaces.MultiDiscrete):
     pol = MultiCategoricalPol(
-        ob_space, ac_space, pol_net, data_parallel=args.data_parallel)
+        observation_space, action_space, pol_net, data_parallel=args.data_parallel)
 else:
     raise ValueError('Only Box, Discrete, and MultiDiscrete are supported')
 
-vf_net = VNet(ob_space)
-vf = DeterministicSVfunc(ob_space, vf_net,
+vf_net = VNet(observation_space)
+vf = DeterministicSVfunc(observation_space, vf_net,
                          data_parallel=args.data_parallel)
 
 if args.rew_type == 'rew':
-    rewf_net = VNet(ob_space, h1=args.discrim_h1, h2=args.discrim_h2)
+    rewf_net = VNet(observation_space, h1=args.discrim_h1, h2=args.discrim_h2)
     rewf = DeterministicSVfunc(
-        ob_space, rewf_net, data_parallel=args.data_parallel)
-    shaping_vf_net = VNet(ob_space, h1=args.discrim_h1, h2=args.discrim_h2)
+        observation_space, rewf_net, data_parallel=args.data_parallel)
+    shaping_vf_net = VNet(
+        observation_space, h1=args.discrim_h1, h2=args.discrim_h2)
     shaping_vf = DeterministicSVfunc(
-        ob_space, shaping_vf_net, data_parallel=args.data_parallel)
+        observation_space, shaping_vf_net, data_parallel=args.data_parallel)
     optim_discrim = torch.optim.Adam(
         list(rewf_net.parameters()) + list(shaping_vf_net.parameters()), args.discrim_lr)
     advf = None
 elif args.rew_type == 'adv':
-    advf_net = DiscrimNet(ob_space, ac_space,
+    advf_net = DiscrimNet(observation_space, action_space,
                           h1=args.discrim_h1, h2=args.discrim_h2)
     advf = DeterministicSAVfunc(
-        ob_space, ac_space, advf_net, data_parallel=args.data_parallel)
+        observation_space, action_space, advf_net, data_parallel=args.data_parallel)
     optim_discrim = torch.optim.Adam(advf_net.parameters(), args.discrim_lr)
     rewf = None
     shaping_vf = None
@@ -205,9 +204,10 @@ if args.rl_type == 'ppo_kl':
 
 if args.pretrain:
     with measure('bc pretrain'):
-        _ = behavior_clone.train(
-            expert_traj, pol, optim_pol, args.bc_batch_size, args.bc_epoch
-        )
+        for _ in range(args.bc_epoch):
+            _ = behavior_clone.train(
+                expert_traj, pol, optim_pol, args.bc_batch_size
+            )
 
 while args.max_epis > total_epi:
     with measure('sample'):
@@ -236,29 +236,29 @@ while args.max_epis > total_epi:
 
         if args.rl_type == 'trpo':
             result_dict = airl.train(agent_traj, expert_traj, pol, vf, optim_vf, optim_discrim,
-                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf, rew_type=args.rew_type,
+                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf,
                                      rl_type=args.rl_type,
                                      epoch=args.epoch_per_iter,
                                      batch_size=args.batch_size, discrim_batch_size=args.discrim_batch_size,
                                      discrim_step=args.discrim_step,
-                                     pol_ent_beta=args.pol_ent_beta, discrim_ent_beta=args.discrim_ent_beta, gamma=args.gamma)
+                                     pol_ent_beta=args.pol_ent_beta, gamma=args.gamma)
         elif args.rl_type == 'ppo_clip':
             result_dict = airl.train(agent_traj, expert_traj, pol, vf, optim_vf, optim_discrim,
-                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf, rew_type=args.rew_type,
+                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf,
                                      rl_type=args.rl_type,
                                      epoch=args.epoch_per_iter,
                                      batch_size=args.batch_size,
                                      discrim_batch_size=args.discrim_batch_size,
                                      discrim_step=args.discrim_step,
-                                     pol_ent_beta=args.pol_ent_beta, discrim_ent_beta=args.discrim_ent_beta,
+                                     pol_ent_beta=args.pol_ent_beta,
                                      optim_pol=optim_pol,
                                      clip_param=args.clip_param, max_grad_norm=args.max_grad_norm, gamma=args.gamma)
 
         else:
             result_dict = airl.train(agent_traj, expert_traj, pol, vf, optim_vf, optim_discrim,
-                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf, rew_type=args.rew_type,
+                                     rewf=rewf, shaping_vf=shaping_vf, advf=advf,
                                      rl_type=args.rl_type,
-                                     pol_ent_beta=args.pol_ent_beta, discrim_ent_beta=args.discrim_ent_beta,
+                                     pol_ent_beta=args.pol_ent_beta,
                                      epoch=args.epoch_per_iter,
                                      batch_size=args.batch_size,
                                      discrim_batch_size=args.discrim_batch_size,
